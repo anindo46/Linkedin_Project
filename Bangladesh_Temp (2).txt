@@ -1,39 +1,24 @@
-# =====================================================
-# 0. INSTALL REQUIRED PACKAGES (RUN ONCE)
-# =====================================================
 !pip install -q requests-cache retry-requests
 
-# =====================================================
-# 1. IMPORTS
-# =====================================================
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
-import matplotlib.patheffects as pe # Crucial for text pop on colorful maps
+import matplotlib.patheffects as pe
 from scipy.interpolate import griddata
 from scipy.ndimage import gaussian_filter
 from shapely.geometry import Point
 import requests_cache
 from retry_requests import retry
 
-# =====================================================
-# 2. USER SETTINGS
-# =====================================================
-DATE = "2025-12-31"  # YYYY-MM-DD
-SHAPEFILE = "/content/BD_admin_boundary.shp"
+DATE = "give your date"
+SHAPEFILE = "give your shapefile"
 
-# =====================================================
-# 3. LOAD BANGLADESH SHAPEFILE
-# =====================================================
 bd = gpd.read_file(SHAPEFILE)
 if bd.crs is None or bd.crs.to_epsg() != 4326:
     bd = bd.to_crs(epsg=4326)
 bd_geom = bd.geometry.unary_union
 
-# =====================================================
-# 4. REPRESENTATIVE CITY / STATION POINTS
-# =====================================================
 cities = {
     "Dhaka": (23.81, 90.41), "Rajshahi": (24.37, 88.60), "Rangpur": (25.74, 89.27),
     "Sylhet": (24.89, 91.86), "Khulna": (22.84, 89.54), "Barishal": (22.70, 90.35),
@@ -43,9 +28,6 @@ cities = {
     "Bhola": (22.17, 90.71), "Srimangal": (24.30, 91.73), "Tetulia": (26.33, 88.55)
 }
 
-# =====================================================
-# 5. OPEN-METEO SAFE SESSION & FETCH
-# =====================================================
 cache = requests_cache.CachedSession(".cache", expire_after=86400)
 session = retry(cache, retries=5, backoff_factor=0.2)
 
@@ -53,8 +35,14 @@ def fetch_daily_mean(lat, lon, date):
     try:
         r = session.get(
             "https://archive-api.open-meteo.com/v1/archive",
-            params={"latitude": lat, "longitude": lon, "start_date": date, "end_date": date,
-                    "daily": "temperature_2m_mean", "timezone": "Asia/Dhaka"},
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "start_date": date,
+                "end_date": date,
+                "daily": "temperature_2m_mean",
+                "timezone": "Asia/Dhaka"
+            },
             timeout=20
         ).json()
         return r["daily"]["temperature_2m_mean"][0]
@@ -62,7 +50,6 @@ def fetch_daily_mean(lat, lon, date):
         return np.nan
 
 rows = []
-print(f"Fetching data for {DATE}...")
 for name, (lat, lon) in cities.items():
     t = fetch_daily_mean(lat, lon, DATE)
     if not np.isnan(t):
@@ -70,114 +57,88 @@ for name, (lat, lon) in cities.items():
 
 pts = pd.DataFrame(rows)
 
-# =====================================================
-# 6-8. INTERPOLATION GRID & PROCESSING
-# =====================================================
 minx, miny, maxx, maxy = bd_geom.bounds
-# Higher resolution for smoother dynamic gradients
 grid_x, grid_y = np.mgrid[minx:maxx:600j, miny:maxy:600j]
 
-# Hybrid Interpolation
 grid_linear = griddata((pts.lon, pts.lat), pts.temp, (grid_x, grid_y), method="linear")
 grid_nearest = griddata((pts.lon, pts.lat), pts.temp, (grid_x, grid_y), method="nearest")
 grid_temp = np.where(np.isnan(grid_linear), grid_nearest, grid_linear)
-
-# Increased smoothing for a "glassy" dynamic look
 grid_temp = gaussian_filter(grid_temp, sigma=2.0)
 
-# Mask
-mask = np.array([bd_geom.contains(Point(x, y)) for x, y in zip(grid_x.flatten(), grid_y.flatten())]).reshape(grid_x.shape)
+mask = np.array([
+    bd_geom.contains(Point(x, y))
+    for x, y in zip(grid_x.flatten(), grid_y.flatten())
+]).reshape(grid_x.shape)
+
 grid_temp = np.where(mask, grid_temp, np.nan)
 
-
-# =====================================================
-# 9. DYNAMIC LAYOUT & PLOTTING (Light Theme)
-# =====================================================
-# Ensure default light background style
-plt.style.use('default')
-
+plt.style.use("default")
 fig, ax = plt.subplots(figsize=(11, 14))
 
-# Define levels for very smooth gradients
-T_MIN = np.nanmin(grid_temp)
-T_MAX = np.nanmax(grid_temp)
-levels = np.linspace(T_MIN, T_MAX, 100)
+levels = np.linspace(np.nanmin(grid_temp), np.nanmax(grid_temp), 100)
 
-# --- DYNAMIC LAYER 1: The Heatmap ---
-# Using 'plasma' cmap: Vibrant Yellow -> Orange -> Purple. Looks energetic on white.
 contour_fill = ax.contourf(
     grid_x, grid_y, grid_temp,
     levels=levels,
     cmap="plasma",
     extend="both",
-    alpha=0.95 # Slight transparency
+    alpha=0.95
 )
 
-# --- DYNAMIC LAYER 2: The Texture Lines ---
-# Adding thin white lines on top gives it a professional weather map feel
-contour_lines = ax.contour(
+ax.contour(
     grid_x, grid_y, grid_temp,
-    levels=levels[::5], # Fewer lines than fills
-    colors='white',
+    levels=levels[::5],
+    colors="white",
     linewidths=0.6,
     alpha=0.5
 )
 
-# Boundary - Dark gray for definition against white BG
-bd.boundary.plot(ax=ax, color="#2c3e50", linewidth=1.8, zorder=2)
+bd.boundary.plot(ax=ax, color="#2c3e50", linewidth=1.8)
 
-# --- POINTS & ANNOTATIONS ---
-# Text effect to make labels pop against colored background
-text_outline = [pe.withStroke(linewidth=2.5, foreground='white')]
-
-# Plot all cities (smaller dots)
+text_outline = [pe.withStroke(linewidth=2.5, foreground="white")]
 ax.scatter(pts.lon, pts.lat, c="#2c3e50", s=20, zorder=3)
 
-# Identify extremes
 coldest = pts.loc[pts.temp.idxmin()]
 warmest = pts.loc[pts.temp.idxmax()]
 
-# Highlight extremes with larger, distinct markers
-ax.scatter(coldest.lon, coldest.lat, c="#3498db", s=90, edgecolors='white', linewidth=2, zorder=4, label="Coldest")
-ax.scatter(warmest.lon, warmest.lat, c="#e74c3c", s=90, edgecolors='white', linewidth=2, zorder=4, label="Warmest")
+ax.scatter(coldest.lon, coldest.lat, c="#3498db", s=90, edgecolors="white", linewidth=2, zorder=4)
+ax.scatter(warmest.lon, warmest.lat, c="#e74c3c", s=90, edgecolors="white", linewidth=2, zorder=4)
 
-# Dynamic Annotation Function
-def add_dynamic_label(row, label_text, ha, va, offset_y=0):
+def add_label(row, tag, dy):
     ax.text(
-        row.lon, row.lat + offset_y,
-        f"{label_text}\n{row['name'].upper()}: {row.temp:.1f}°C",
-        fontsize=10, fontweight='bold', color='#2c3e50',
-        ha=ha, va=va, path_effects=text_outline, zorder=5
+        row.lon, row.lat + dy,
+        f"{tag}\n{row.name.upper()}: {row.temp:.1f}°C",
+        fontsize=10,
+        fontweight="bold",
+        color="#2c3e50",
+        path_effects=text_outline
     )
 
-add_dynamic_label(coldest, "▼ LOW", "right", "top", offset_y=-0.08)
-add_dynamic_label(warmest, "▲ HIGH", "left", "bottom", offset_y=0.08)
+add_label(coldest, "▼ LOW", -0.08)
+add_label(warmest, "▲ HIGH", 0.08)
 
-# --- TITLES & LAYOUT ---
-# Main Title with a "Report" feel
 ax.set_title(
     f"BANGLADESH THERMAL SNAPSHOT\nHigh-Resolution Analysis | {DATE}",
-    fontsize=18, fontweight="bold", color="#2c3e50", pad=20
+    fontsize=18,
+    fontweight="bold",
+    color="#2c3e50",
+    pad=20
 )
 
-# Clean up axes
 ax.set_axis_off()
 
-# Dynamic Colorbar
 cbar = plt.colorbar(contour_fill, ax=ax, fraction=0.035, pad=0.04, aspect=30)
-cbar.set_label("Mean Temperature (°C)", fontsize=11, fontweight='bold', labelpad=10, color="#2c3e50")
-cbar.outline.set_linewidth(0) # Cleaner look
+cbar.set_label("Mean Temperature (°C)", fontsize=11, fontweight="bold", color="#2c3e50")
+cbar.outline.set_linewidth(0)
 
-# --- PERSONAL BRANDING (Crucial for Viral Posts) ---
-fig.text(0.5, 0.05,
-         "Visualization: Anindo Paul Sourav  |  Data Source: Open-Meteo ERA5 Reanalysis",
-         ha='center', fontsize=9, color='#7f8c8d')
+fig.text(
+    0.5, 0.05,
+    "Credit: Anindo Paul Sourav | linkedin: anindo046 |  Data Source: Open-Meteo ERA5 Reanalysis",
+    ha="center",
+    fontsize=8,
+    color="#7f8c8d"
+)
 
 plt.tight_layout()
-
-# Save High-Res version
-output_file = "Bangladesh_Dynamic_Temp_Map_Light.png"
-plt.savefig(output_file, dpi=300, bbox_inches='tight')
-print(f"Map saved to {output_file}")
-
+plt.savefig("Bangladesh_Dynamic_Temp_Map_Light.png", dpi=300, bbox_inches="tight")
 plt.show()
