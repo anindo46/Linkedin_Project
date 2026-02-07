@@ -1,0 +1,115 @@
+var roi = ee.FeatureCollection("FAO/GAUL/2015/level2")
+    .filter(ee.Filter.eq('ADM2_NAME', 'Barisal'));
+
+Map.centerObject(roi, 10);
+
+function processImage(image) {
+  var qa = image.select('QA60');
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+             .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+             
+  var ndwi = image.normalizedDifference(['B3', 'B8']);
+  var waterMask = ndwi.lt(0.1); 
+
+  var blue = image.select('B2').divide(10000);
+  var red = image.select('B4').divide(10000);
+  var si = blue.multiply(red).sqrt().rename('Salinity_Index');
+
+  return si.updateMask(mask).updateMask(waterMask)
+           .copyProperties(image, ['system:time_start']);
+}
+
+var dataset = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                  .filterDate('2024-03-01', '2024-05-15')
+                  .filterBounds(roi)
+                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+                  .map(processImage)
+                  .median()
+                  .clip(roi);
+
+var siVis = {
+  min: 0.02, 
+  max: 0.12, 
+  palette: ['000080', '008080', 'FFFF00', 'FF0000'], 
+};
+
+Map.setOptions('HYBRID');
+Map.addLayer(dataset, siVis, 'Barishal Soil Salinity 2024');
+
+var border = ee.Image().paint(roi, 0, 2);
+Map.addLayer(border, {palette: 'white'}, 'District Border');
+
+var chartCol = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+    .filterBounds(roi)
+    .filterDate('2020-01-01', '2024-12-31')
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+    .select(['B2', 'B4', 'QA60'])
+    .map(function(img) {
+        var si = img.expression('sqrt(b("B2")*0.0001 * b("B4")*0.0001)').rename('Salinity_Index');
+        return si.set('system:time_start', img.get('system:time_start'));
+    });
+
+var chart = ui.Chart.image.series({
+  imageCollection: chartCol,
+  region: roi,
+  reducer: ee.Reducer.median(),
+  scale: 5000, 
+  xProperty: 'system:time_start'
+})
+.setOptions({
+  title: 'Barishal Salinity Trend (5 Years)',
+  vAxis: {title: 'Avg SI'},
+  hAxis: {title: 'Date', format: 'MMM yy'},
+  colors: ['#008080'], 
+  lineWidth: 2,
+  pointSize: 3,
+});
+
+chart.style().set({
+  position: 'bottom-right',
+  width: '350px',
+  height: '250px'
+});
+
+Map.add(chart);
+
+var titlePanel = ui.Panel({
+  style: {position: 'top-center', padding: '10px', backgroundColor: 'rgba(255, 255, 255, 0.9)'}
+});
+var title = ui.Label('Barishal District Salinity Map', {fontWeight: 'bold', fontSize: '20px', color: '#006064'});
+var sub = ui.Label('Micro-analysis of salt accumulation (Dry Season 2024)', {fontSize: '12px', color: '#555'});
+titlePanel.add(title).add(sub);
+Map.add(titlePanel);
+
+var legend = ui.Panel({style: {position: 'bottom-left', padding: '8px', backgroundColor: 'rgba(255, 255, 255, 0.9)'}});
+var legTitle = ui.Label('Salinity Level', {fontWeight: 'bold'});
+legend.add(legTitle);
+
+var makeRow = function(color, name) {
+  var colorBox = ui.Label({style: {backgroundColor: '#' + color, padding: '8px', margin: '0 4px 4px 0'}});
+  var desc = ui.Label({value: name, style: {margin: '0 0 4px 6px'}});
+  return ui.Panel({widgets: [colorBox, desc], layout: ui.Panel.Layout.Flow('horizontal')});
+};
+
+legend.add(makeRow('FF0000', 'High (Relative to District)'));
+legend.add(makeRow('FFFF00', 'Moderate'));
+legend.add(makeRow('008080', 'Low'));
+legend.add(makeRow('000080', 'Non-Saline / Veg'));
+Map.add(legend);
+
+var creditPanel = ui.Panel({
+  style: {
+    position: 'top-right',
+    padding: '8px 12px',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    border: '1px solid #ccc'
+  }
+});
+
+var creditText = ui.Label('Credit: Anindo', {fontSize: '14px', fontWeight: 'bold', margin: '0 0 4px 0'});
+var linkedInText = ui.Label('LinkedIn: anindo046', {fontSize: '12px', color: '#0077b5', margin: '0'});
+
+creditPanel.add(creditText).add(linkedInText);
+Map.add(creditPanel);
