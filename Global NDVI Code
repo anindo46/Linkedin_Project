@@ -1,0 +1,98 @@
+var collection = ee.ImageCollection('MODIS/061/MOD13Q1')
+  .filterDate('2024-06-01', '2024-09-01')
+  .select('NDVI');
+
+print('Images found:', collection.size());
+
+var ndvi = collection.median().multiply(0.0001);
+
+var visParams = {
+  min: 0.0,
+  max: 0.9,
+  palette: [
+    '#FFFFFF',
+    '#CE7E45',
+    '#FCD163',
+    '#99B718',
+    '#74A901',
+    '#66A000',
+    '#207401',
+    '#056201'
+  ]
+};
+
+var waterMask = ee.Image('MODIS/006/MOD44W/2015_01_01')
+  .select('water_mask')
+  .eq(0);
+
+var ndviMasked = ndvi.updateMask(waterMask);
+
+Map.setCenter(90, 24, 3);
+Map.setOptions('HYBRID');
+Map.addLayer(ndviMasked, visParams, 'Global NDVI (MODIS 061)');
+
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px'
+  }
+});
+
+var legendTitle = ui.Label({
+  value: 'NDVI (Vegetation Index)',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '16px',
+    margin: '0 0 4px 0'
+  }
+});
+
+legend.add(legendTitle);
+
+function makeColorBar(palette) {
+  return ui.Thumbnail({
+    image: ee.Image.pixelLonLat().select(0),
+    params: {
+      bbox: [0, 0, 1, 0.1],
+      dimensions: '100x10',
+      format: 'png',
+      min: 0,
+      max: 1,
+      palette: palette
+    },
+    style: {
+      stretch: 'horizontal',
+      margin: '0px 8px',
+      maxHeight: '24px'
+    }
+  });
+}
+
+legend.add(makeColorBar(visParams.palette));
+
+var labels = ui.Panel({
+  widgets: [
+    ui.Label(visParams.min, {margin: '4px 8px'}),
+    ui.Label('High', {
+      margin: '4px 8px',
+      textAlign: 'right',
+      stretch: 'horizontal'
+    })
+  ],
+  layout: ui.Panel.Layout.flow('horizontal')
+});
+
+legend.add(labels);
+
+legend.add(
+  ui.Label({
+    value: 'Anindo | LinkedIn: anindo046',
+    style: {
+      fontSize: '11px',
+      color: '#555555',
+      margin: '6px 0 0 0'
+    }
+  })
+);
+
+Map.add(legend);
