@@ -1,0 +1,133 @@
+var africa = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017")
+    .filter(ee.Filter.eq('wld_rgn', 'Africa'));
+
+var collection = ee.ImageCollection('MODIS/061/MOD13Q1').select('NDVI');
+
+function getAnnualNDVI(year) {
+  var startDate = ee.Date.fromYMD(year, 1, 1);
+  var endDate = ee.Date.fromYMD(year, 12, 31);
+  
+  return collection
+    .filterDate(startDate, endDate)
+    .median()
+    .multiply(0.0001)
+    .clip(africa)
+    .set('system:time_start', startDate.millis()); 
+}
+
+var img2000 = getAnnualNDVI(2000);
+var imgCurrent = getAnnualNDVI(2024); 
+
+var diff = imgCurrent.subtract(img2000).rename('NDVI_Change');
+
+var years = ee.List.sequence(2000, 2024);
+var annualCollection = ee.ImageCollection.fromImages(
+  years.map(function(y) { return getAnnualNDVI(y); })
+);
+
+var visNDVI = {
+  min: 0.0, max: 0.8,
+  palette: ['FFFFFF', 'CE7E45', 'FCD163', '99B718', '207401']
+};
+
+var visDiff = {
+  min: -0.15, max: 0.15, 
+  palette: ['d7191c', 'fdae61', 'ffffff', 'a6d96a', '1a9641']
+};
+
+var mainPanel = ui.Panel({
+  layout: ui.Panel.Layout.absolute(),
+  style: {width: '100%', height: '100%'}
+});
+
+function createMapPanel(map, label, position) {
+  map.setControlVisibility({all: false, zoomControl: true});
+  map.setOptions('Hybrid');
+  map.style().set({position: position, width: '50%', height: '50%'});
+  map.add(ui.Label(label, {
+    position: 'top-center', fontWeight: 'bold', 
+    backgroundColor: 'rgba(255,255,255,0.7)', padding: '4px'
+  }));
+  return map;
+}
+
+var mapTL = ui.Map();
+mapTL.addLayer(img2000, visNDVI, 'NDVI 2000');
+mainPanel.add(createMapPanel(mapTL, '2000 (Baseline)', 'top-left'));
+
+var mapTR = ui.Map();
+mapTR.addLayer(imgCurrent, visNDVI, 'NDVI 2024');
+mainPanel.add(createMapPanel(mapTR, '2024 (Current)', 'top-right'));
+
+var mapBL = ui.Map();
+mapBL.addLayer(diff, visDiff, 'Vegetation Change');
+mainPanel.add(createMapPanel(mapBL, 'Change (Green=Gain, Red=Loss)', 'bottom-left'));
+
+var linker = ui.Map.Linker([mapTL, mapTR, mapBL]);
+mapTL.centerObject(africa, 3);
+
+var panelBR = ui.Panel({
+  style: {
+    position: 'bottom-right',
+    width: '49%', 
+    height: '49%',
+    padding: '10px',
+    backgroundColor: '#FFFFFF'
+  }
+});
+mainPanel.add(panelBR);
+
+ui.root.widgets().reset([mainPanel]);
+
+panelBR.add(ui.Label('Trend Analysis (Africa)', {fontSize: '18px', fontWeight: 'bold'}));
+
+var chart = ui.Chart.image.series({
+  imageCollection: annualCollection,
+  region: africa,
+  reducer: ee.Reducer.mean(),
+  scale: 100000, 
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'Annual Median NDVI (2000-2024)',
+  vAxis: {title: 'NDVI Value'},
+  hAxis: {title: 'Year', format: 'yyyy'},
+  colors: ['#207401'],
+  lineWidth: 2,
+  pointSize: 4,
+  legend: {position: 'none'},
+  chartArea: {width: '85%', height: '60%'}
+});
+
+panelBR.add(chart);
+
+function createLegend(title, vis) {
+  var titleLabel = ui.Label(title, {fontWeight: 'bold', margin: '15px 0 5px 0'});
+  var lon = ee.Image.pixelLonLat().select('longitude');
+  var gradient = lon.multiply((vis.max - vis.min) / 100.0).add(vis.min);
+  var legendImage = gradient.visualize(vis);
+  
+  var thumb = ui.Thumbnail({
+    image: legendImage,
+    params: {bbox:'0,0,100,10', dimensions:'300x15'},
+    style: {padding: '0', margin: '0 0 5px 0'}
+  });
+  
+  var labels = ui.Panel({
+    layout: ui.Panel.Layout.flow('horizontal'),
+    style: {width: '300px'}
+  });
+  labels.add(ui.Label(vis.min, {fontSize: '10px'}));
+  labels.add(ui.Label(vis.max, {fontSize: '10px', margin: '0 0 0 auto'}));
+  
+  return ui.Panel([titleLabel, thumb, labels]);
+}
+
+panelBR.add(createLegend('Vegetation Density (NDVI)', visNDVI));
+panelBR.add(createLegend('Change (Loss vs Gain)', visDiff));
+
+panelBR.add(ui.Label('Credit: Anindo, linkedin Anindo046', {
+  fontSize: '11px', 
+  color: 'gray', 
+  margin: '20px 0 0 0',
+  fontWeight: 'bold'
+}));
