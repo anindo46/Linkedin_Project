@@ -1,0 +1,165 @@
+var gaul = ee.FeatureCollection("FAO/GAUL/2015/level1");
+var bangladesh = gaul.filter(ee.Filter.eq('ADM0_NAME', 'Bangladesh'));
+var s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED');
+
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask).divide(10000);
+}
+
+var dataset = s2.filterDate('2025-01-01', '2025-12-31')
+                  .filterBounds(bangladesh)
+                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+                  .map(maskS2clouds);
+
+var ndsi = dataset.median().normalizedDifference(['B11', 'B8']).rename('NDSI');
+
+var visParams = {
+  min: -0.5,
+  max: 0.5,
+  palette: ['006400', '228B22', 'FFFF00', 'FFA500', '8B0000']
+};
+
+Map.setOptions('SATELLITE');
+Map.centerObject(bangladesh, 7);
+Map.addLayer(ndsi.clip(bangladesh), visParams, 'Salinity Severity (NDSI) 2025');
+
+// --- TITLE PANEL ---
+var titlePanel = ui.Panel({
+  style: {
+    position: 'top-center',
+    padding: '10px 20px',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)'
+  }
+});
+
+var titleLabel = ui.Label({
+  value: 'BANGLADESH SOIL SALINITY MONITORING REPORT (2025)',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '18px',
+    margin: '0',
+    color: '#2c3e50',
+    backgroundColor: 'rgba(255, 255, 255, 0)'
+  }
+});
+
+var subTitleLabel = ui.Label({
+  value: 'Satellite-Derived Normalized Difference Salinity Index (Sentinel-2)',
+  style: {
+    fontSize: '12px',
+    margin: '4px 0 0 0',
+    color: '#7f8c8d',
+    backgroundColor: 'rgba(255, 255, 255, 0)'
+  }
+});
+
+titlePanel.add(titleLabel);
+titlePanel.add(subTitleLabel);
+Map.add(titlePanel);
+
+// --- LEGEND PANEL ---
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)'
+  }
+});
+
+var legendTitle = ui.Label({
+  value: 'Salinity Severity',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '14px',
+    margin: '0 0 4px 0',
+    padding: '0',
+    backgroundColor: 'rgba(255, 255, 255, 0)'
+  }
+});
+
+legend.add(legendTitle);
+
+var lon = ee.Image.pixelLonLat().select('latitude');
+var gradient = lon.multiply((visParams.max - visParams.min) / 100.0).add(visParams.min);
+var legendImage = gradient.visualize(visParams);
+
+var thumbnail = ui.Thumbnail({
+  image: legendImage,
+  params: {bbox: '0,0,10,100', dimensions: '20x120'},
+  style: {padding: '0px', position: 'bottom-center'}
+});
+
+var labels = ui.Panel({
+  widgets: [
+    ui.Label('Critical', {margin: '0px 0px 4px 8px', fontSize: '12px', fontWeight: 'bold', backgroundColor: 'rgba(255, 255, 255, 0)'}),
+    ui.Label('', {margin: 'auto', stretch: 'vertical', backgroundColor: 'rgba(255, 255, 255, 0)'}),
+    ui.Label('Moderate', {margin: 'auto', stretch: 'vertical', fontSize: '11px', backgroundColor: 'rgba(255, 255, 255, 0)'}),
+    ui.Label('', {margin: 'auto', stretch: 'vertical', backgroundColor: 'rgba(255, 255, 255, 0)'}),
+    ui.Label('Vegetation', {margin: '4px 0px 0px 8px', fontSize: '12px', backgroundColor: 'rgba(255, 255, 255, 0)'})
+  ],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {height: '125px', backgroundColor: 'rgba(255, 255, 255, 0)'}
+});
+
+var legendBody = ui.Panel({
+  widgets: [thumbnail, labels],
+  layout: ui.Panel.Layout.flow('horizontal'),
+  style: {backgroundColor: 'rgba(255, 255, 255, 0)'}
+});
+
+legend.add(legendBody);
+Map.add(legend);
+
+// --- CHART PANEL ---
+var chartPanel = ui.Panel({
+  style: {
+    position: 'bottom-right',
+    width: '350px',
+    height: '250px',
+    padding: '10px',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)'
+  }
+});
+
+var chartTitle = ui.Label({
+  value: 'Regional Impact Analysis',
+  style: {fontSize: '14px', fontWeight: 'bold', color: '#333', backgroundColor: 'rgba(255, 255, 255, 0)'}
+});
+
+chartPanel.add(chartTitle);
+
+var chart = ui.Chart.image.byRegion({
+  image: ndsi,
+  regions: bangladesh,
+  reducer: ee.Reducer.mean(),
+  scale: 2000,
+  xProperty: 'ADM1_NAME'
+});
+
+chart.setChartType('ColumnChart');
+chart.setOptions({
+  title: '',
+  legend: {position: 'none'},
+  hAxis: {
+    title: 'Division', 
+    titleTextStyle: {italic: false, bold: true, fontSize: 10, color: '#555'},
+    textStyle: {fontSize: 9, color: '#333'}
+  },
+  vAxis: {
+    title: 'Mean NDSI', 
+    titleTextStyle: {italic: false, bold: true, fontSize: 10, color: '#555'},
+    textStyle: {fontSize: 10, color: '#333'},
+    gridlines: {color: '#eee', count: 4}
+  },
+  colors: ['#e74c3c'],
+  backgroundColor: { fill: 'transparent' }, // Corrected syntax for Charts
+  bar: {groupWidth: '65%'}
+});
+
+chartPanel.add(chart);
+Map.add(chartPanel);
